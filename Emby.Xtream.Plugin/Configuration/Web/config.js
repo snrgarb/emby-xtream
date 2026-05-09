@@ -460,7 +460,8 @@ function (BaseView, loading) {
 
             config.BaseUrl = view.querySelector('.txtBaseUrl').value.replace(/\/+$/, '');
             config.Username = view.querySelector('.txtUsername').value;
-            config.Password = view.querySelector('.txtPassword').value;
+            var _pwdVal = view.querySelector('.txtPassword').value;
+            if (_pwdVal) config.Password = _pwdVal;
             config.HttpUserAgent = view.querySelector('.txtHttpUserAgent').value;
 
             config.EnableLiveTv = view.querySelector('.chkEnableLiveTv').checked;
@@ -488,7 +489,8 @@ function (BaseView, loading) {
             config.EnableDispatcharr = view.querySelector('.chkEnableDispatcharr').checked;
             config.DispatcharrUrl = view.querySelector('.txtDispatcharrUrl').value.replace(/\/+$/, '');
             config.DispatcharrUser = view.querySelector('.txtDispatcharrUser').value;
-            config.DispatcharrPass = view.querySelector('.txtDispatcharrPass').value;
+            var _dPwdVal = view.querySelector('.txtDispatcharrPass').value;
+            if (_dPwdVal) config.DispatcharrPass = _dPwdVal;
             config.DispatcharrFallbackToXtream = view.querySelector('.chkDispatcharrFallback').checked;
             config.ForceAudioTranscode = view.querySelector('.chkForceAudioTranscode').checked;
             config.SelectedDispatcharrProfileIds = getSelectedDispatcharrProfileIds(instance);
