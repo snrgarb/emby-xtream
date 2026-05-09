@@ -114,6 +114,11 @@ namespace Emby.Xtream.Plugin
         /// Used to skip per-episode file I/O when the episode list hasn't changed.
         /// </summary>
         public string SeriesEpisodeHashesJson { get; set; } = string.Empty;
+
+        // Tracks which folder naming flags were active during the last series sync.
+        // A change triggers automatic full re-sync so the pre-fetch skip can't match stale paths.
+        public bool LastKnownEnableSeriesIdFolderNaming { get; set; }
+        public bool LastKnownEnableSeriesMetadataLookup { get; set; }
     }
 
     public enum EpgSourceMode

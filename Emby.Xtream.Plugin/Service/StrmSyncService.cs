@@ -87,6 +87,10 @@ namespace Emby.Xtream.Plugin.Service
             @"\((\d{4})\)\s*$",
             RegexOptions.Compiled);
 
+        private static readonly Regex FolderIdSuffixRegex = new Regex(
+            @" \[(?:tmdbid|tvdbid)=\d+\]$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static readonly int MaxHistoryEntries = 10;
         private static readonly HttpClient SharedHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -662,6 +666,20 @@ namespace Emby.Xtream.Plugin.Service
                 var lastSeriesTs = config.LastSeriesSyncTimestamp;
                 long maxSeriesTs = lastSeriesTs;
 
+                // Auto-reset delta state when folder naming flags change (stale folder paths would break pre-fetch skip)
+                if (config.EnableSeriesIdFolderNaming != config.LastKnownEnableSeriesIdFolderNaming
+                    || config.EnableSeriesMetadataLookup != config.LastKnownEnableSeriesMetadataLookup)
+                {
+                    if (lastSeriesTs > 0)
+                        _logger.Info("Series folder naming flags changed — forcing full re-sync");
+                    lastSeriesTs = 0;
+                    maxSeriesTs = 0;
+                    config.SeriesEpisodeHashesJson = string.Empty;
+                }
+                config.LastKnownEnableSeriesIdFolderNaming = config.EnableSeriesIdFolderNaming;
+                config.LastKnownEnableSeriesMetadataLookup = config.EnableSeriesMetadataLookup;
+                saveConfig?.Invoke();
+
                 _seriesProgress.Total = allSeries.Count;
                 _seriesProgress.Phase = "Writing STRM files";
 
@@ -692,6 +710,35 @@ namespace Emby.Xtream.Plugin.Service
                 var updatedHashes = new ConcurrentDictionary<string, string>();
                 int hashSkippedCount = 0;
 
+                // Pre-fetch directory index: subFolder → {strippedSeriesName → fullDirPath}
+                // Built once before the parallel loop (one readdir per unique subfolder, no per-task races).
+                var subFolderDirIndex = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+                if (config.SmartSkipExisting && lastSeriesTs > 0)
+                {
+                    var uniqueSubFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var s in allSeries)
+                    {
+                        var sf = BuildContentFolderPath(
+                            config.SeriesFolderMode, s.CategoryId, categoryNames, folderMappings, "Shows");
+                        if (sf != null) uniqueSubFolders.Add(sf);
+                    }
+                    foreach (var sf in uniqueSubFolders)
+                    {
+                        var fullPath = Path.Combine(config.StrmLibraryPath, sf);
+                        var idx = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        if (Directory.Exists(fullPath))
+                        {
+                            foreach (var dir in Directory.GetDirectories(fullPath))
+                            {
+                                var stripped = StripFolderIdSuffix(Path.GetFileName(dir));
+                                if (!string.IsNullOrEmpty(stripped) && !idx.ContainsKey(stripped))
+                                    idx[stripped] = dir;
+                            }
+                        }
+                        subFolderDirIndex[sf] = idx;
+                    }
+                }
+
                 var tasks = allSeries.Select(async series =>
                 {
                     await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -716,6 +763,44 @@ namespace Emby.Xtream.Plugin.Service
                             Interlocked.Increment(ref _seriesProgress.Completed);
                             ReportTaskProgress(_seriesProgress, taskProgress);
                             return;
+                        }
+
+                        // Track delta timestamp before the API call (series.LastModified comes from the list, no extra HTTP needed)
+                        long seriesLm = 0;
+                        long.TryParse(series.LastModified, NumberStyles.None, CultureInfo.InvariantCulture, out seriesLm);
+                        if (seriesLm > 0)
+                        {
+                            lock (_historyLock) { if (seriesLm > maxSeriesTs) maxSeriesTs = seriesLm; }
+                        }
+
+                        var isChangedSeries = lastSeriesTs == 0 || seriesLm > lastSeriesTs;
+
+                        // Pre-fetch smart skip: for delta-unchanged series, locate folder on disk by name
+                        // (avoids one get_series_info HTTP call per unchanged series)
+                        if (!isChangedSeries && config.SmartSkipExisting)
+                        {
+                            Dictionary<string, string> dirIndex;
+                            string existingDir;
+                            if (subFolderDirIndex.TryGetValue(subFolder, out dirIndex)
+                                && dirIndex.TryGetValue(seriesName, out existingDir))
+                            {
+                                var existingStrms = Directory.GetFiles(existingDir, "*.strm", SearchOption.AllDirectories);
+                                if (existingStrms.Length > 0)
+                                {
+                                    foreach (var strm in existingStrms)
+                                        lock (writtenPaths) writtenPaths.Add(strm);
+                                    var seriesKey = series.SeriesId.ToString(CultureInfo.InvariantCulture);
+                                    string carryHash;
+                                    if (storedHashes.TryGetValue(seriesKey, out carryHash))
+                                        updatedHashes[seriesKey] = carryHash;
+                                    Interlocked.Increment(ref _seriesProgress.Skipped);
+                                    Interlocked.Increment(ref _seriesProgress.Completed);
+                                    ReportTaskProgress(_seriesProgress, taskProgress);
+                                    Interlocked.Add(ref _episodeProgress.Total, existingStrms.Length);
+                                    Interlocked.Add(ref _episodeProgress.Skipped, existingStrms.Length);
+                                    return;
+                                }
+                            }
                         }
 
                         // Fetch series detail (needed for episodes + TMDB ID)
@@ -802,46 +887,6 @@ namespace Emby.Xtream.Plugin.Service
                             Directory.CreateDirectory(seriesDir);
                             try { NfoWriter.WriteShowNfo(showNfoPath, seriesName, showTvdbId, showTmdbId); }
                             catch (Exception ex) { _logger.Debug("Show NFO write failed for '{0}': {1}", seriesName, ex.Message); }
-                        }
-
-                        // Track max LastModified for delta state
-                        long seriesLm = 0;
-                        long.TryParse(series.LastModified, NumberStyles.None, CultureInfo.InvariantCulture, out seriesLm);
-                        if (seriesLm > 0)
-                        {
-                            lock (_historyLock)
-                            {
-                                if (seriesLm > maxSeriesTs) maxSeriesTs = seriesLm;
-                            }
-                        }
-
-                        // Smart skip: skip unchanged series (delta) that already have episodes on disk
-                        var isChangedSeries = lastSeriesTs == 0 || seriesLm > lastSeriesTs;
-                        if (!isChangedSeries && config.SmartSkipExisting && Directory.Exists(seriesDir))
-                        {
-                            var existingStrms = Directory.GetFiles(seriesDir, "*.strm", SearchOption.AllDirectories);
-                            if (existingStrms.Length > 0)
-                            {
-                                // Add existing paths so orphan cleanup doesn't remove them
-                                foreach (var existingStrm in existingStrms)
-                                {
-                                    lock (writtenPaths)
-                                    {
-                                        writtenPaths.Add(existingStrm);
-                                    }
-                                }
-                                Interlocked.Increment(ref _seriesProgress.Skipped);
-                                Interlocked.Increment(ref _seriesProgress.Completed);
-                                ReportTaskProgress(_seriesProgress, taskProgress);
-                                Interlocked.Add(ref _episodeProgress.Total, existingStrms.Length);
-                                Interlocked.Add(ref _episodeProgress.Skipped, existingStrms.Length);
-                                // Carry forward the stored hash (unchanged series)
-                                var seriesKey = series.SeriesId.ToString(CultureInfo.InvariantCulture);
-                                string carryHash;
-                                if (storedHashes.TryGetValue(seriesKey, out carryHash))
-                                    updatedHashes[seriesKey] = carryHash;
-                                return;
-                            }
                         }
 
                         // Episode hash skip: compare episode ID+ext hash to detect unchanged content
@@ -1347,6 +1392,11 @@ namespace Emby.Xtream.Plugin.Service
 
             // Priority 4: no ID
             return sanitizedName;
+        }
+
+        private static string StripFolderIdSuffix(string folderName)
+        {
+            return FolderIdSuffixRegex.Replace(folderName, string.Empty);
         }
 
         /// <summary>

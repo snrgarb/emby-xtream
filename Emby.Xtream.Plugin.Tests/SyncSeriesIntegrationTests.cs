@@ -69,8 +69,8 @@ namespace Emby.Xtream.Plugin.Tests
             // URL format: {BaseUrl}/series/{Username}/{Password}/{episodeId}.{ext}
             Assert.Equal("http://fake-xtream/series/user/pass/101.mp4", content);
 
-            // Timestamp (2000) > 0 → saved; episode hashes also saved → 2 saves
-            Assert.Equal(2, SaveConfigCallCount);
+            // flag-tracking save + timestamp save + episode hashes save → 3 saves
+            Assert.Equal(3, SaveConfigCallCount);
         }
 
         // -----------------------------------------------------------------
@@ -92,10 +92,10 @@ namespace Emby.Xtream.Plugin.Tests
             File.WriteAllText(strmPath, "SENTINEL");
 
             var list = SeriesListJson(Series(seriesId: 1, name: "Test Show", lastModified: "2000"));
-            // Detail is still needed because SmartSkip check requires existing .strm on disk;
-            // but since the directory already exists and has a .strm, the code returns early
-            // before making the series_info request. Register it anyway (won't be called,
-            // but FakeHttpHandler only throws on unmatched URLs that ARE called).
+            // Pre-fetch skip: lastModified (2000) < lastSeriesSyncTimestamp (9999) → isChangedSeries = false
+            // → folder found in directory index with existing .strm → return BEFORE calling get_series_info.
+            // Register the detail response anyway in case the test ever regresses (FakeHttpHandler only
+            // throws on unmatched URLs that ARE actually called).
             Handler.RespondWith("action=get_series", list);
             Handler.RespondWith("action=get_series_info&series_id=1", SeriesDetailJson());
 
@@ -224,9 +224,8 @@ namespace Emby.Xtream.Plugin.Tests
 
             var strmPath = EpisodeStrmPath("Test Show", season: 1, episode: 1, title: "Ep One");
             Assert.True(File.Exists(strmPath), $"Expected STRM file at: {strmPath}");
-            // maxSeriesTs (0) is NOT > LastSeriesSyncTimestamp (100) → no timestamp save,
-            // but episode hashes are always saved → 1 save
-            Assert.Equal(1, SaveConfigCallCount);
+            // flag-tracking save + episode hashes save → 2 saves (no timestamp save: maxSeriesTs 0 < 100)
+            Assert.Equal(2, SaveConfigCallCount);
         }
 
         // -----------------------------------------------------------------
