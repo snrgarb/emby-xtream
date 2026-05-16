@@ -288,23 +288,30 @@ namespace Emby.Xtream.Plugin.Api
                 "{0}/player_api.php?username={1}&password={2}&action=get_vod_categories",
                 config.BaseUrl, Uri.EscapeDataString(config.Username), Uri.EscapeDataString(config.Password));
 
-            using (var httpClient = Plugin.CreateHttpClient())
+            try
             {
-                var json = await httpClient.GetStringAsync(url).ConfigureAwait(false);
-                var categories = System.Text.Json.JsonSerializer.Deserialize<List<Category>>(json,
-                    new System.Text.Json.JsonSerializerOptions
-                    {
-                        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
-                        PropertyNameCaseInsensitive = true,
-                    }) ?? new List<Category>();
-                var sorted = categories.OrderBy(c => c.CategoryName).ToList();
+                using (var httpClient = Plugin.CreateHttpClient())
+                {
+                    var json = await httpClient.GetStringAsync(url).ConfigureAwait(false);
+                    var categories = System.Text.Json.JsonSerializer.Deserialize<List<Category>>(json,
+                        new System.Text.Json.JsonSerializerOptions
+                        {
+                            NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
+                            PropertyNameCaseInsensitive = true,
+                        }) ?? new List<Category>();
+                    var sorted = categories.OrderBy(c => c.CategoryName).ToList();
 
-                // Cache for instant UI loading
-                config.CachedVodCategories = System.Text.Json.JsonSerializer.Serialize(
-                    sorted.Select(c => new { c.CategoryId, c.CategoryName }).ToList());
-                Plugin.Instance.SaveConfiguration();
+                    // Cache for instant UI loading
+                    config.CachedVodCategories = System.Text.Json.JsonSerializer.Serialize(
+                        sorted.Select(c => new { c.CategoryId, c.CategoryName }).ToList());
+                    Plugin.Instance.SaveConfiguration();
 
-                return sorted;
+                    return sorted;
+                }
+            }
+            catch
+            {
+                return new List<Category>();
             }
         }
 
@@ -323,49 +330,56 @@ namespace Emby.Xtream.Plugin.Api
                 PropertyNameCaseInsensitive = true,
             };
 
-            using (var httpClient = Plugin.CreateHttpClient())
+            try
             {
-                var url = string.Format(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    "{0}/player_api.php?username={1}&password={2}&action=get_series_categories",
-                    config.BaseUrl, Uri.EscapeDataString(config.Username), Uri.EscapeDataString(config.Password));
-
-                var json = await httpClient.GetStringAsync(url).ConfigureAwait(false);
-                var categories = System.Text.Json.JsonSerializer.Deserialize<List<Category>>(json, jsonOptions)
-                    ?? new List<Category>();
-                var sorted = categories.OrderBy(c => c.CategoryName).ToList();
-
-                // Fallback: derive categories from series list when server returns empty
-                if (sorted.Count == 0)
+                using (var httpClient = Plugin.CreateHttpClient())
                 {
-                    var seriesUrl = string.Format(
+                    var url = string.Format(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        "{0}/player_api.php?username={1}&password={2}&action=get_series",
+                        "{0}/player_api.php?username={1}&password={2}&action=get_series_categories",
                         config.BaseUrl, Uri.EscapeDataString(config.Username), Uri.EscapeDataString(config.Password));
 
-                    var seriesJson = await httpClient.GetStringAsync(seriesUrl).ConfigureAwait(false);
-                    var seriesList = System.Text.Json.JsonSerializer.Deserialize<List<SeriesInfo>>(seriesJson, jsonOptions)
-                        ?? new List<SeriesInfo>();
+                    var json = await httpClient.GetStringAsync(url).ConfigureAwait(false);
+                    var categories = System.Text.Json.JsonSerializer.Deserialize<List<Category>>(json, jsonOptions)
+                        ?? new List<Category>();
+                    var sorted = categories.OrderBy(c => c.CategoryName).ToList();
 
-                    sorted = seriesList
-                        .Where(s => s.CategoryId.HasValue)
-                        .GroupBy(s => s.CategoryId.Value)
-                        .Select(g => new Category
-                        {
-                            CategoryId = g.Key,
-                            CategoryName = g.FirstOrDefault(s => !string.IsNullOrEmpty(s.CategoryName))?.CategoryName
-                                ?? "Category " + g.Key,
-                        })
-                        .OrderBy(c => c.CategoryName)
-                        .ToList();
+                    // Fallback: derive categories from series list when server returns empty
+                    if (sorted.Count == 0)
+                    {
+                        var seriesUrl = string.Format(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            "{0}/player_api.php?username={1}&password={2}&action=get_series",
+                            config.BaseUrl, Uri.EscapeDataString(config.Username), Uri.EscapeDataString(config.Password));
+
+                        var seriesJson = await httpClient.GetStringAsync(seriesUrl).ConfigureAwait(false);
+                        var seriesList = System.Text.Json.JsonSerializer.Deserialize<List<SeriesInfo>>(seriesJson, jsonOptions)
+                            ?? new List<SeriesInfo>();
+
+                        sorted = seriesList
+                            .Where(s => s.CategoryId.HasValue)
+                            .GroupBy(s => s.CategoryId.Value)
+                            .Select(g => new Category
+                            {
+                                CategoryId = g.Key,
+                                CategoryName = g.FirstOrDefault(s => !string.IsNullOrEmpty(s.CategoryName))?.CategoryName
+                                    ?? "Category " + g.Key,
+                            })
+                            .OrderBy(c => c.CategoryName)
+                            .ToList();
+                    }
+
+                    // Cache for instant UI loading
+                    config.CachedSeriesCategories = System.Text.Json.JsonSerializer.Serialize(
+                        sorted.Select(c => new { c.CategoryId, c.CategoryName }).ToList());
+                    Plugin.Instance.SaveConfiguration();
+
+                    return sorted;
                 }
-
-                // Cache for instant UI loading
-                config.CachedSeriesCategories = System.Text.Json.JsonSerializer.Serialize(
-                    sorted.Select(c => new { c.CategoryId, c.CategoryName }).ToList());
-                Plugin.Instance.SaveConfiguration();
-
-                return sorted;
+            }
+            catch
+            {
+                return new List<Category>();
             }
         }
 

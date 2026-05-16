@@ -1296,7 +1296,7 @@ function (BaseView, loading) {
             instance.loadedVodCategories = categories;
 
             if (!categories || categories.length === 0) {
-                listEl.innerHTML = '<div style="opacity:0.5;">No VOD categories found. Check your Xtream connection settings.</div>';
+                listEl.innerHTML = '<div style="opacity:0.5;">No VOD categories found. Your provider may not include VOD access on this account.</div>';
                 return;
             }
 
@@ -1346,7 +1346,7 @@ function (BaseView, loading) {
             instance.loadedVodCategories = categories || [];
 
             if (!categories || categories.length === 0) {
-                statusEl.textContent = 'No VOD categories found.';
+                statusEl.textContent = 'No VOD categories found. Your provider may not include VOD access on this account.';
                 statusEl.style.color = '#cc0000'; statusEl.style.opacity = '1';
                 clearFolderCardCategories(view, 'movie');
                 return;
@@ -1417,7 +1417,7 @@ function (BaseView, loading) {
             instance.loadedSeriesCategories = categories;
 
             if (!categories || categories.length === 0) {
-                listEl.innerHTML = '<div style="opacity:0.5;">No series categories found. Check your Xtream connection settings.</div>';
+                listEl.innerHTML = '<div style="opacity:0.5;">No series categories found. Your provider may not include series access on this account.</div>';
                 return;
             }
 
@@ -1467,7 +1467,7 @@ function (BaseView, loading) {
             instance.loadedSeriesCategories = categories || [];
 
             if (!categories || categories.length === 0) {
-                statusEl.textContent = 'No series categories found.';
+                statusEl.textContent = 'No series categories found. Your provider may not include series access on this account.';
                 statusEl.style.color = '#cc0000'; statusEl.style.opacity = '1';
                 clearFolderCardCategories(view, 'series');
                 return;
