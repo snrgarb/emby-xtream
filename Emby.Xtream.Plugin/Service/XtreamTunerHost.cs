@@ -47,6 +47,7 @@ namespace Emby.Xtream.Plugin.Service
         private volatile HashSet<int> _allowedStreamIds;
         private List<ChannelInfo> _cachedChannels;
         private DateTime _cacheTime = DateTime.MinValue;
+        private static volatile bool _gracenoteFieldDiagnosticLogged;
 
 
         public int CachedChannelCount => _cachedChannels?.Count ?? 0;
@@ -520,9 +521,278 @@ namespace Emby.Xtream.Plugin.Service
                         Logger.Warn("Auto detach listing providers failed: {0}", ex.Message);
                     }
                 });
+
+                _ = Task.Run(() =>
+                {
+                    try { StampGracenoteLogosOntoChannels(result); }
+                    catch (Exception ex) { Logger.Warn("Gracenote logo stamping failed: {0}", ex.Message); }
+                });
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// BUG-023: when a channel has a Gracenote station ID but no Dispatcharr-supplied
+        /// <see cref="ChannelInfo.ImageUrl"/>, look up a logo from each configured listings
+        /// provider and stamp it onto the channel in place. The plugin auto-detaches from
+        /// listings providers when <c>DeferEpgToGuideData</c> is on (to prevent BUG-018
+        /// wrong-channel auto-mapping), which also kills Emby's normal cross-match for
+        /// logos. This method restores the logo without re-attaching.
+        ///
+        /// Only fills in when <c>ImageUrl</c> is empty — Dispatcharr-supplied logos always win.
+        ///
+        /// On first invocation per process, also logs a diagnostic block dumping a few
+        /// sample <see cref="ChannelInfo"/> records and probing which field carries the
+        /// station ID, so we can confirm the field-match assumption against real provider
+        /// data without a second round-trip with the reporter.
+        /// </summary>
+        private void StampGracenoteLogosOntoChannels(List<ChannelInfo> channels)
+        {
+            ILiveTvManager liveTvManager;
+            IConfigurationManager configManager;
+            try
+            {
+                liveTvManager = _applicationHost.Resolve<ILiveTvManager>();
+                configManager = _applicationHost.Resolve<IConfigurationManager>();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("StampGracenoteLogos: failed to resolve services: {0}", ex.Message);
+                return;
+            }
+
+            var liveTvOptions = configManager.GetConfiguration("livetv") as LiveTvOptions;
+            var providers = liveTvManager.ListingProviders;
+            if (liveTvOptions?.ListingProviders == null || liveTvOptions.ListingProviders.Length == 0
+                || providers == null || providers.Length == 0)
+            {
+                return;
+            }
+
+            var firstRunDiagnostic = !_gracenoteFieldDiagnosticLogged;
+            _gracenoteFieldDiagnosticLogged = true;
+
+            // For diagnostic only: build a set of ALL plugin station IDs so we can report
+            // the full intersection with each provider's channel list.
+            var allPluginStationIds = firstRunDiagnostic
+                ? new HashSet<string>(
+                    _stationIdMap.Values.Where(s => !string.IsNullOrEmpty(s)),
+                    StringComparer.OrdinalIgnoreCase)
+                : null;
+
+            // Channel-side fields we'll consult to associate a tuner channel with a
+            // listings-provider channel. ListingsChannelId is where the plugin already
+            // stashes the Gracenote station ID (see GetChannelsInternal line 449), so
+            // it's the natural match key.
+            var channelsByStationId = channels
+                .Where(c => !string.IsNullOrEmpty(c.ListingsChannelId)
+                            && string.IsNullOrEmpty(c.ImageUrl))
+                .GroupBy(c => c.ListingsChannelId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            if (channelsByStationId.Count == 0 && !firstRunDiagnostic)
+            {
+                return;
+            }
+
+            var stationIdsToProbe = firstRunDiagnostic
+                ? _stationIdMap.Values
+                    .Where(s => !string.IsNullOrEmpty(s))
+                    .Distinct()
+                    .Take(5)
+                    .ToList()
+                : null;
+            if (firstRunDiagnostic)
+            {
+                Logger.Info("[gracenote-diag] probing {0} listings provider(s) for station IDs: [{1}]",
+                    providers.Length, string.Join(", ", stationIdsToProbe));
+            }
+
+            var matchedFieldCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            int totalStamped = 0;
+
+            foreach (var listingsProvider in providers)
+            {
+                var infos = liveTvOptions.ListingProviders
+                    .Where(p => string.Equals(p.Type, listingsProvider.Type, StringComparison.OrdinalIgnoreCase)
+                                && !string.IsNullOrEmpty(p.Id))
+                    .ToList();
+
+                foreach (var info in infos)
+                {
+                    var providerLabel = string.Format(CultureInfo.InvariantCulture,
+                        "{0}/{1} (id={2})", listingsProvider.Name, info.ListingsId, info.Id);
+
+                    List<ChannelInfo> providerChannels;
+                    try
+                    {
+                        providerChannels = listingsProvider.GetChannels(info, CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        if (firstRunDiagnostic)
+                            Logger.Warn("[gracenote-diag] {0}: GetChannels threw: {1}", providerLabel, ex.Message);
+                        continue;
+                    }
+
+                    if (providerChannels == null || providerChannels.Count == 0)
+                    {
+                        if (firstRunDiagnostic)
+                            Logger.Info("[gracenote-diag] {0}: 0 channels", providerLabel);
+                        continue;
+                    }
+
+                    if (firstRunDiagnostic)
+                    {
+                        Logger.Info("[gracenote-diag] {0}: {1} channels", providerLabel, providerChannels.Count);
+
+                        // Full-coverage intersection — count how many plugin station IDs
+                        // match ANY field on ANY channel in this provider. This is the
+                        // upper bound on what stamping could ever achieve for this user.
+                        int idHits = 0, listingsChannelIdHits = 0, tunerChannelIdHits = 0, altNameHits = 0;
+                        foreach (var ch in providerChannels)
+                        {
+                            if (allPluginStationIds.Contains(ch.Id ?? string.Empty))
+                                idHits++;
+                            if (!string.IsNullOrEmpty(ch.ListingsChannelId) && allPluginStationIds.Contains(ch.ListingsChannelId))
+                                listingsChannelIdHits++;
+                            if (!string.IsNullOrEmpty(ch.TunerChannelId) && allPluginStationIds.Contains(ch.TunerChannelId))
+                                tunerChannelIdHits++;
+                            if (ch.AlternateNames != null)
+                            {
+                                foreach (var alt in ch.AlternateNames)
+                                {
+                                    if (!string.IsNullOrEmpty(alt) && allPluginStationIds.Contains(alt))
+                                    {
+                                        altNameHits++;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Logger.Info("[gracenote-diag] {0}: intersection with {1} plugin station IDs — Id:{2} ListingsChannelId:{3} TunerChannelId:{4} AlternateNames:{5}",
+                            providerLabel, allPluginStationIds.Count, idHits, listingsChannelIdHits, tunerChannelIdHits, altNameHits);
+                        foreach (var ch in providerChannels.Take(5))
+                        {
+                            Logger.Info(
+                                "[gracenote-diag]   sample: Id='{0}' Number='{1}' Name='{2}' CallSign='{3}' " +
+                                "ListingsChannelId='{4}' ListingsId='{5}' TunerChannelId='{6}' " +
+                                "AlternateNames=[{7}] HasImageUrl={8}",
+                                ch.Id, ch.Number, ch.Name, ch.CallSign,
+                                ch.ListingsChannelId, ch.ListingsId, ch.TunerChannelId,
+                                ch.AlternateNames == null ? string.Empty : string.Join(",", ch.AlternateNames),
+                                !string.IsNullOrEmpty(ch.ImageUrl));
+                        }
+                        foreach (var stationId in stationIdsToProbe)
+                        {
+                            var matchedFields = new List<string>();
+                            foreach (var ch in providerChannels)
+                            {
+                                if (string.Equals(ch.Id, stationId, StringComparison.OrdinalIgnoreCase))
+                                    matchedFields.Add("Id");
+                                if (string.Equals(ch.ListingsChannelId, stationId, StringComparison.OrdinalIgnoreCase))
+                                    matchedFields.Add("ListingsChannelId");
+                                if (string.Equals(ch.TunerChannelId, stationId, StringComparison.OrdinalIgnoreCase))
+                                    matchedFields.Add("TunerChannelId");
+                                if (ch.AlternateNames != null
+                                    && ch.AlternateNames.Any(n => string.Equals(n, stationId, StringComparison.OrdinalIgnoreCase)))
+                                    matchedFields.Add("AlternateNames");
+                            }
+                            if (matchedFields.Count == 0)
+                                Logger.Info("[gracenote-diag]   station {0}: no match in {1}", stationId, providerLabel);
+                            else
+                                Logger.Info("[gracenote-diag]   station {0}: matched in {1} via [{2}]",
+                                    stationId, providerLabel, string.Join(",", matchedFields.Distinct()));
+                        }
+                    }
+
+                    var stamped = StampLogosFromProviderChannels(
+                        channelsByStationId, providerChannels, matchedFieldCounts);
+                    totalStamped += stamped;
+                }
+            }
+
+            if (totalStamped > 0)
+            {
+                var breakdown = string.Join(", ",
+                    matchedFieldCounts.Select(kv => string.Format(CultureInfo.InvariantCulture, "{0}={1}", kv.Key, kv.Value)));
+                Logger.Info("Stamped Gracenote logos onto {0} channel(s) (matched via: {1})",
+                    totalStamped, breakdown);
+            }
+            else if (channelsByStationId.Count > 0)
+            {
+                Logger.Info("StampGracenoteLogos: 0 logos stamped — {0} channel(s) had a station ID but no listings provider returned a matching channel with an image URL",
+                    channelsByStationId.Count);
+            }
+
+            if (firstRunDiagnostic)
+                Logger.Info("[gracenote-diag] done");
+        }
+
+        /// <summary>
+        /// Pure stamping logic, extracted for unit-testability. Walks
+        /// <paramref name="providerChannels"/> once and, for each channel that has an
+        /// <see cref="ChannelInfo.ImageUrl"/>, probes its candidate station-ID fields
+        /// (<c>Id</c>, <c>ListingsChannelId</c>, <c>TunerChannelId</c>, then each
+        /// <c>AlternateNames</c> entry, in that order) against
+        /// <paramref name="channelsByStationId"/>. First field-match wins per provider
+        /// channel — subsequent fields on the same channel won't double-stamp.
+        /// Increments <paramref name="matchedFieldCounts"/> for the field that matched.
+        /// Returns total stamps applied.
+        /// </summary>
+        internal static int StampLogosFromProviderChannels(
+            Dictionary<string, ChannelInfo> channelsByStationId,
+            List<ChannelInfo> providerChannels,
+            Dictionary<string, int> matchedFieldCounts)
+        {
+            int totalStamped = 0;
+            foreach (var pc in providerChannels)
+            {
+                if (string.IsNullOrEmpty(pc.ImageUrl))
+                    continue;
+
+                if (TryStampLogo(channelsByStationId, pc.Id, pc.ImageUrl))
+                    IncrementCount(matchedFieldCounts, "Id", ref totalStamped);
+                if (TryStampLogo(channelsByStationId, pc.ListingsChannelId, pc.ImageUrl))
+                    IncrementCount(matchedFieldCounts, "ListingsChannelId", ref totalStamped);
+                if (TryStampLogo(channelsByStationId, pc.TunerChannelId, pc.ImageUrl))
+                    IncrementCount(matchedFieldCounts, "TunerChannelId", ref totalStamped);
+                if (pc.AlternateNames != null)
+                {
+                    foreach (var altName in pc.AlternateNames)
+                    {
+                        if (TryStampLogo(channelsByStationId, altName, pc.ImageUrl))
+                            IncrementCount(matchedFieldCounts, "AlternateNames", ref totalStamped);
+                    }
+                }
+            }
+            return totalStamped;
+        }
+
+        private static bool TryStampLogo(
+            Dictionary<string, ChannelInfo> channelsByStationId,
+            string candidateStationId,
+            string imageUrl)
+        {
+            if (string.IsNullOrEmpty(candidateStationId))
+                return false;
+            if (!channelsByStationId.TryGetValue(candidateStationId, out var ch))
+                return false;
+            if (!string.IsNullOrEmpty(ch.ImageUrl))
+                return false;  // another field-match already stamped it; don't double-count
+            ch.ImageUrl = imageUrl;
+            return true;
+        }
+
+        private static void IncrementCount(Dictionary<string, int> counts, string key, ref int total)
+        {
+            if (counts.TryGetValue(key, out var n))
+                counts[key] = n + 1;
+            else
+                counts[key] = 1;
+            total++;
         }
 
         private static async Task<List<Client.Models.LiveStreamInfo>> FetchAllChannelsDirectAsync(PluginConfiguration config)
