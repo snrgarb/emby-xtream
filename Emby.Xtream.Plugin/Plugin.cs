@@ -52,7 +52,8 @@ namespace Emby.Xtream.Plugin
         /// </summary>
         public static HttpClient CreateHttpClient(int timeoutSeconds = 10)
         {
-            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            var handler = new Service.XtreamRateLimitHandler { InnerHandler = new HttpClientHandler() };
+            var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             var ua = _instance?.Configuration?.HttpUserAgent;
             if (!string.IsNullOrEmpty(ua))
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", ua);

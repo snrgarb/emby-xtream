@@ -92,7 +92,9 @@ namespace Emby.Xtream.Plugin.Service
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static readonly int MaxHistoryEntries = 10;
-        private static readonly HttpClient SharedHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        private static readonly HttpClient SharedHttpClient = new HttpClient(
+            new XtreamRateLimitHandler { InnerHandler = new HttpClientHandler() })
+        { Timeout = TimeSpan.FromSeconds(30) };
 
         // Increment when naming logic changes so existing installs force a full re-sync on next run.
         internal const int CurrentStrmNamingVersion = 1;

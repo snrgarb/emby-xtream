@@ -476,6 +476,14 @@
                             Number of parallel operations during sync (default: 3). Higher = faster but more server load.
                         </div>
                     </div>
+                    <div class="inputContainer">
+                        <input class="txtXtreamRequestsPerSecond" type="number" is="emby-input"
+                               label="Provider Rate Limit (req/s)" min="0" max="100" step="1" />
+                        <div class="fieldDescription">
+                            Cap on requests per second to the Xtream provider. <strong>0 = disabled</strong>
+                            (default). Set to around 10 if your provider returns 403 / 429 errors during sync.
+                        </div>
+                    </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label>
                             <input class="chkCleanupOrphans" type="checkbox" is="emby-checkbox" />

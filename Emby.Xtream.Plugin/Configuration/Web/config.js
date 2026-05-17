@@ -406,6 +406,7 @@ function (BaseView, loading) {
             validateStrmPath(view);
             view.querySelector('.chkSmartSkipExisting').checked = config.SmartSkipExisting !== false;
             view.querySelector('.txtSyncParallelism').value = config.SyncParallelism || 3;
+            view.querySelector('.txtXtreamRequestsPerSecond').value = config.XtreamRequestsPerSecond || 0;
             view.querySelector('.chkCleanupOrphans').checked = !!config.CleanupOrphans;
             view.querySelector('.txtOrphanSafetyThreshold').value = Math.round((config.OrphanSafetyThreshold || 0.20) * 100);
             view.querySelector('.orphanThresholdContainer').style.display = config.CleanupOrphans ? '' : 'none';
@@ -514,6 +515,7 @@ function (BaseView, loading) {
             config.StrmLibraryPath = view.querySelector('.txtStrmLibraryPath').value.replace(/\/+$/, '') || '/config/xtream';
             config.SmartSkipExisting = view.querySelector('.chkSmartSkipExisting').checked;
             config.SyncParallelism = parseInt(view.querySelector('.txtSyncParallelism').value, 10) || 3;
+            config.XtreamRequestsPerSecond = parseInt(view.querySelector('.txtXtreamRequestsPerSecond').value, 10) || 0;
             config.CleanupOrphans = view.querySelector('.chkCleanupOrphans').checked;
             config.OrphanSafetyThreshold = (parseInt(view.querySelector('.txtOrphanSafetyThreshold').value, 10) || 0) / 100;
             config.EnableNfoFiles = view.querySelector('.chkEnableNfoFiles').checked;

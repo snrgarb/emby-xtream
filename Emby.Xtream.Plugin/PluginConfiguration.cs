@@ -93,6 +93,9 @@ namespace Emby.Xtream.Plugin
         public int SyncParallelism { get; set; } = 3;
         public bool CleanupOrphans { get; set; }
 
+        /// <summary>Max requests/second to the Xtream provider. 0 = disabled (no throttle).</summary>
+        public int XtreamRequestsPerSecond { get; set; } = 0;
+
         /// <summary>Fraction of existing STRMs that can be deleted in one cleanup pass. 0 = disabled.</summary>
         public double OrphanSafetyThreshold { get; set; } = 0.20;
 
