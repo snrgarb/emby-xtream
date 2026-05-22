@@ -49,6 +49,12 @@ namespace Emby.Xtream.Plugin.Service
         private DateTime _cacheTime = DateTime.MinValue;
         private static volatile bool _gracenoteFieldDiagnosticLogged;
 
+        // Emby's built-in Gracenote (Emby Guide Data) provider type. Other listings
+        // providers (XMLTV, Schedules Direct, etc.) with high lineup overlap to plugin
+        // station IDs are likely to shadow Gracenote programs in Emby's guide rendering.
+        // See ADR-008.
+        private const string GracenoteProviderType = "embygn";
+
 
         public int CachedChannelCount => _cachedChannels?.Count ?? 0;
 
@@ -674,6 +680,24 @@ namespace Emby.Xtream.Plugin.Service
                         }
                         Logger.Info("[gracenote-diag] {0}: intersection with {1} plugin station IDs — Id:{2} ListingsChannelId:{3} TunerChannelId:{4} AlternateNames:{5}",
                             providerLabel, allPluginStationIds.Count, idHits, listingsChannelIdHits, tunerChannelIdHits, altNameHits);
+
+                        // ADR-008 / BUG-023: a non-Gracenote listings provider that covers
+                        // most of the plugin's station IDs is likely to shadow Gracenote
+                        // programs in Emby's guide rendering. Warn so users can spot the
+                        // dual-provider conflict from the log without external help.
+                        int coveredStationIdCount;
+                        if (IsLikelyShadowingProvider(
+                                listingsProvider.Type, allPluginStationIds, providerChannels,
+                                out coveredStationIdCount))
+                        {
+                            Logger.Warn(
+                                "[gracenote-diag] WARNING: {0} (type='{1}') covers {2}/{3} of your Gracenote station IDs. " +
+                                "Its programs may shadow Gracenote data in the Emby guide. " +
+                                "If channels are showing placeholder EPG (channel name as program title, fixed-duration blocks), " +
+                                "remove this listings provider from Emby's Live TV settings.",
+                                providerLabel, listingsProvider.Type, coveredStationIdCount, allPluginStationIds.Count);
+                        }
+
                         foreach (var ch in providerChannels.Take(5))
                         {
                             Logger.Info(
@@ -729,6 +753,53 @@ namespace Emby.Xtream.Plugin.Service
 
             if (firstRunDiagnostic)
                 Logger.Info("[gracenote-diag] done");
+        }
+
+        /// <summary>
+        /// ADR-008 shadowing detection. A non-Gracenote listings provider whose channel
+        /// lineup covers at least half of the plugin's Gracenote station IDs is treated
+        /// as a likely shadow risk: Emby's guide rendering layer will read its programs
+        /// for those station IDs and overlay them on top of the plugin's returned data.
+        /// Coverage is measured as DISTINCT plugin station IDs that appear in ANY of
+        /// <c>Id</c>, <c>ListingsChannelId</c>, <c>TunerChannelId</c>, or
+        /// <c>AlternateNames</c> on any provider channel — duplicates count once.
+        /// </summary>
+        /// <returns>True if a warning should be logged for this provider.</returns>
+        internal static bool IsLikelyShadowingProvider(
+            string providerType,
+            HashSet<string> allPluginStationIds,
+            List<ChannelInfo> providerChannels,
+            out int coveredStationIdCount)
+        {
+            coveredStationIdCount = 0;
+            if (allPluginStationIds == null || allPluginStationIds.Count == 0)
+                return false;
+            if (providerChannels == null || providerChannels.Count == 0)
+                return false;
+
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ch in providerChannels)
+            {
+                if (!string.IsNullOrEmpty(ch.Id) && allPluginStationIds.Contains(ch.Id))
+                    covered.Add(ch.Id);
+                if (!string.IsNullOrEmpty(ch.ListingsChannelId) && allPluginStationIds.Contains(ch.ListingsChannelId))
+                    covered.Add(ch.ListingsChannelId);
+                if (!string.IsNullOrEmpty(ch.TunerChannelId) && allPluginStationIds.Contains(ch.TunerChannelId))
+                    covered.Add(ch.TunerChannelId);
+                if (ch.AlternateNames != null)
+                {
+                    foreach (var alt in ch.AlternateNames)
+                    {
+                        if (!string.IsNullOrEmpty(alt) && allPluginStationIds.Contains(alt))
+                            covered.Add(alt);
+                    }
+                }
+            }
+            coveredStationIdCount = covered.Count;
+
+            if (string.Equals(providerType, GracenoteProviderType, StringComparison.OrdinalIgnoreCase))
+                return false;
+            return coveredStationIdCount * 2 >= allPluginStationIds.Count;
         }
 
         /// <summary>
