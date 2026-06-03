@@ -46,6 +46,7 @@ function (BaseView, loading) {
             updateDispatcharrVisibility(view);
         });
 
+
         view.querySelector('.selectEpgSource').addEventListener('change', function () {
             updateEpgVisibility(view);
         });
@@ -368,6 +369,7 @@ function (BaseView, loading) {
             view.querySelector('.txtDispatcharrPass').value = config.DispatcharrPass || '';
             view.querySelector('.chkDispatcharrFallback').checked = config.DispatcharrFallbackToXtream !== false;
             view.querySelector('.chkForceAudioTranscode').checked = !!config.ForceAudioTranscode;
+            view.querySelector('.chkDeclareDvbSubtitles').checked = !!config.DeclareDvbSubtitles;
 
             instance.selectedDispatcharrProfileIds = config.SelectedDispatcharrProfileIds || [];
             loadCachedDispatcharrProfiles(instance, config);
@@ -494,6 +496,7 @@ function (BaseView, loading) {
             if (_dPwdVal) config.DispatcharrPass = _dPwdVal;
             config.DispatcharrFallbackToXtream = view.querySelector('.chkDispatcharrFallback').checked;
             config.ForceAudioTranscode = view.querySelector('.chkForceAudioTranscode').checked;
+            config.DeclareDvbSubtitles = view.querySelector('.chkDeclareDvbSubtitles').checked;
             config.SelectedDispatcharrProfileIds = getSelectedDispatcharrProfileIds(instance);
 
             // VOD Movies
@@ -585,7 +588,7 @@ function (BaseView, loading) {
         view.querySelector('.dispatcharrSettings').style.display = enabled ? '' : 'none';
     }
 
-    function updateEpgVisibility(view) {
+function updateEpgVisibility(view) {
         var source = parseInt(view.querySelector('.selectEpgSource').value, 10);
         view.querySelector('.epgSettings').style.display = source !== 2 ? '' : 'none';
         view.querySelector('.epgCustomUrlSettings').style.display = source === 1 ? '' : 'none';

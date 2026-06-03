@@ -73,6 +73,8 @@ namespace Emby.Xtream.Plugin.Service
 
         public IServerApplicationHost ApplicationHost => _applicationHost;
 
+        public Dictionary<int, StreamStatsInfo> StreamStats => _streamStats;
+
         public override string Name => "Xtream Tuner";
         public override string Type => TunerType;
         public override bool IsSupported => true;
@@ -908,7 +910,7 @@ namespace Emby.Xtream.Plugin.Service
 
             _streamStats.TryGetValue(streamId, out var stats);
 
-            var mediaSource = CreateMediaSourceInfo(streamId, streamUrl, stats, isDispatcharr, config.ForceAudioTranscode, config.HttpUserAgent, config.FallbackTranscodeBitrateMbps);
+            var mediaSource = CreateMediaSourceInfo(streamId, streamUrl, stats, isDispatcharr, config.ForceAudioTranscode, config.HttpUserAgent, config.FallbackTranscodeBitrateMbps, config.DeclareDvbSubtitles);
             Logger.Info("[stream-timing] ch={0} CreateMediaSource={1}ms hasStats={2}", tunerChannel?.Name, sw.ElapsedMilliseconds, stats != null);
 
             return new List<MediaSourceInfo> { mediaSource };
@@ -942,7 +944,7 @@ namespace Emby.Xtream.Plugin.Service
             Logger.Info("[stream-timing] ch={0} BuildUrl={1}ms isDispatcharr={2}", tunerChannel?.Name, sw.ElapsedMilliseconds, isDispatcharr);
             sw.Restart();
 
-            var mediaSource = CreateMediaSourceInfo(streamId, streamUrl, stats, isDispatcharr, config.ForceAudioTranscode, config.HttpUserAgent, config.FallbackTranscodeBitrateMbps);
+            var mediaSource = CreateMediaSourceInfo(streamId, streamUrl, stats, isDispatcharr, config.ForceAudioTranscode, config.HttpUserAgent, config.FallbackTranscodeBitrateMbps, config.DeclareDvbSubtitles);
             Logger.Info("[stream-timing] ch={0} CreateMediaSource={1}ms hasStats={2}", tunerChannel?.Name, sw.ElapsedMilliseconds, stats != null);
 
             var httpClient = Plugin.CreateHttpClient();
@@ -1422,7 +1424,7 @@ namespace Emby.Xtream.Plugin.Service
         private MediaSourceInfo CreateMediaSourceInfo(
             int streamId, string streamUrl, StreamStatsInfo stats,
             bool disableProbing = false, bool forceAudioTranscode = false,
-            string userAgent = null, int fallbackBitrateMbps = 0)
+            string userAgent = null, int fallbackBitrateMbps = 0, bool declareDvbSubtitles = false)
         {
             var sourceId = "xtream_live_" + streamId.ToString(CultureInfo.InvariantCulture);
 
@@ -1589,6 +1591,38 @@ namespace Emby.Xtream.Plugin.Service
                     : (audioCodecLower ?? "aac").ToUpperInvariant();
 
                 mediaStreams.Add(audioStream);
+
+                if (declareDvbSubtitles)
+                {
+                    // Infer language from the audio track — subtitle language matches audio on DVB
+                    var subLang = !string.IsNullOrEmpty(stats?.AudioLanguage) ? stats.AudioLanguage : null;
+                    var langLabel = subLang?.ToUpperInvariant();
+
+                    mediaStreams.Add(new MediaStream
+                    {
+                        Type = MediaStreamType.Subtitle,
+                        Index = mediaStreams.Count,
+                        Codec = "dvb_subtitle",
+                        Language = subLang,
+                        IsExternal = false,
+                        IsForced = false,
+                        IsDefault = false,
+                        DisplayTitle = langLabel != null ? langLabel + " DVBSUB" : "DVB Subtitles",
+                    });
+
+                    mediaStreams.Add(new MediaStream
+                    {
+                        Type = MediaStreamType.Subtitle,
+                        Index = mediaStreams.Count,
+                        Codec = "dvb_subtitle",
+                        Language = subLang,
+                        IsExternal = false,
+                        IsForced = false,
+                        IsDefault = false,
+                        IsHearingImpaired = true,
+                        DisplayTitle = langLabel != null ? langLabel + " SDH DVBSUB" : "DVB Subtitles SDH",
+                    });
+                }
 
                 mediaSource.MediaStreams = mediaStreams;
                 mediaSource.DefaultAudioStreamIndex = isAudioOnly ? 0 : 1;
