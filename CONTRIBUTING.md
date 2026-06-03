@@ -31,6 +31,12 @@ When `SupportsProbing = true` and `AnalyzeDurationMs > 0`, Emby runs ffprobe aga
 
 **Rule**: always set `SupportsProbing = false` and `AnalyzeDurationMs = 0` for Dispatcharr proxy URLs. Direct Xtream URLs can still use probing when stream stats are absent.
 
+### DVB subtitles are declared statically, not probed
+
+Because probing stays off, Emby never discovers DVB subtitle tracks embedded in MPEG-TS by itself. The optional `DeclareDvbSubtitles` config flag (off by default) tells `CreateMediaSourceInfo` to append two `dvb_subtitle` `MediaStream` entries (regular and hearing impaired) to every live channel. ffmpeg silently drops them on sources that don't carry subtitle PIDs, so the cost is two unused entries in the player menu on non-DVB channels. See [ADR-009](docs/decisions/009-dvb-subtitle-static-declaration.md).
+
+A diagnostic endpoint `GET /XtreamTuner/StreamStats` exposes the cached Dispatcharr stream stats for all known streams (codecs, resolution, bitrate, audio language). Useful when reasoning about what metadata is or isn't reaching the plugin.
+
 ### Guide grid empty after setup
 
 If the Emby guide shows no channels despite having data, check browser localStorage for a stale `guide-tagids` filter. The guide calls `/LiveTv/EPG?TagIds=<id>` — if the stored tag ID doesn't match any channel the grid is empty. Fix: click the filter icon in the guide, or run `localStorage.removeItem('guide-tagids')` in the browser console.

@@ -27,6 +27,7 @@ Full Live TV integration with Emby's native TV guide.
 - **Category-based filtering** — select which channel groups to include
 - **Stream format selection** — MPEG-TS or HLS (M3U8)
 - **Adult content filtering** — opt-in toggle for adult-flagged channels
+- **DVB subtitle declaration** — optional toggle that surfaces DVB subtitle tracks for live TV without re-enabling stream probing (see [ADR-009](docs/decisions/009-dvb-subtitle-static-declaration.md))
 - **Automatic caching** — M3U (15 min) and EPG (30 min) with thread-safe invalidation
 
 ### VOD Movie Library
@@ -194,6 +195,7 @@ Download the latest DLL from [Releases](../../releases/latest), replace the file
 | Setting | Default | Description |
 |---|---|---|
 | **Stream Format** | MPEG-TS | Live TV container format (`ts` or `m3u8`) |
+| **Enable DVB Subtitles** | Off | Declare DVB subtitle tracks on every live channel so they appear without stream probing (non-DVB sources will show empty subtitle options) |
 | **EPG Cache** | 30 min | How long to cache EPG data (5-1440 min) |
 | **EPG Days** | 2 | Days of guide data to fetch (1-14) |
 | **M3U Cache** | 15 min | How long to cache channel playlists (1-1440 min) |
